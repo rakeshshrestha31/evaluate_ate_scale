@@ -43,23 +43,12 @@ This script computes the absolute trajectory error from the ground truth
 trajectory and the estimated trajectory.
 """
 
-from __future__ import print_function
 import sys
 import numpy
 import argparse
-import yaml
 
 import associate
-import transformations
-
-def eprint(*args, **kwargs):
-    """
-    print to stderr instead of stdout
-    :param args: same as that in print
-    :param kwargs: same as that in print
-    :return:
-    """
-    print(*args, file=sys.stderr, **kwargs)
+from utils import get_T_BS, convert_groundtruth, convert_traj_to_body_frame
 
 def align(model,data):
     """Align two trajectories using the method of Horn (closed-form).
@@ -140,64 +129,6 @@ def plot_traj(ax,stamps,traj,style,color,label):
     if len(x)>0:
         ax.plot(x,y,style,color=color,label=label)
 
-def get_transformation(config_file):
-    """
-    Gets transformation from body frame (imu) to sensor frame (camera)
-    :param config_file: the sensor.yaml file containing sensor to body transformation
-    :return: the transformation matrix if successful, None if not
-    """
-    config = None
-    with open(config_file, 'r') as stream:
-        config = yaml.load(stream)
-
-    if not config:
-        eprint("bad config file")
-        return None
-
-    if (not 'T_BS' in config) or (not 'data' in config['T_BS']):
-        eprint("required keys not in the config file")
-        return None
-    T_BS = numpy.asarray(config['T_BS']['data'])
-    T_BS = numpy.resize(T_BS, (4, 4))
-
-    T_SB = numpy.linalg.inv(T_BS)
-    return T_SB
-
-def convert_groundtruth(groundtruth, T_SB):
-    """
-    Convert groundtruth from EuRoC format to TUM format (and transform it to sensor (camera frame) from body frame
-    :param groundtruth: a dictionary of groundtruth data in the EuRoC format timestamp(ns),tx,ty,tz,qw,qx,qy,qz)
-    :param T_SB: a two tuple of rotation (quaternion) and translation representing transformation from body to sensor frame
-    :return: equivalent dictionary in TUM-RGBD format timestamp(s) tx ty tz qx qy qz qw
-    """
-
-    def euroc_pose_2_transform(euroc_pose):
-        """
-        Convert from EuRoC pose format to transformation matrix
-        :param euroc_pose: tx,ty,tz,qw,qx,qy,qz
-        :return: equivalent transformation matrix
-        """
-        T = transformations.quaternion_matrix(euroc_pose[3:7])
-        T[:3, 3] = euroc_pose[:3]
-        return T
-
-    def transformation_2_tum_pose(T):
-        """
-        Convert from transformation matrix to TUM-RGBD dataset pose
-        :param T: transformation matrix
-        :return: tum pose: tx ty tz qx qy qz qw
-        """
-        q = transformations.quaternion_from_matrix(T)
-        return [
-            T[0, 3], T[1, 3],T[2, 3],
-            q[1], q[2], q[3], q[0] # x,y,z,w
-        ]
-
-    return {
-        (i*1e-9): transformation_2_tum_pose( numpy.dot(T_SB, euroc_pose_2_transform(groundtruth[i][:7])) )
-        for i in groundtruth
-    }
-
 if __name__=="__main__":
     # parse command line
     parser = argparse.ArgumentParser(description='''
@@ -219,10 +150,11 @@ if __name__=="__main__":
     second_list = associate.read_file_list(args.second_file)
 
     # the transformation from body frame to sensor frame
-    T_SB = get_transformation(args.third_file)
+    T_BS = get_T_BS(args.third_file)
 
     # convert from EuRoC to TUM-RGBD format
-    first_list = convert_groundtruth(first_list, T_SB)
+    first_list = convert_groundtruth(first_list)
+    second_list = convert_traj_to_body_frame(second_list, T_BS)
 
     matches = associate.associate(first_list, second_list,float(args.offset),float(args.max_difference))
     if len(matches)<2:
